@@ -1,0 +1,296 @@
+---
+title: "Prudential Life Insurance Data Analysis"
+Author: 'Sumukh Ramesh'
+Date: 'November 25th, 2018'
+Last Update: ''
+output: html_notebook
+---
+
+Reading Prudential Life Insurance Data
+
+```{r, echo = FALSE, message = FALSE, warnings = FALSE}
+library(tidyverse)
+library(ggplot2)
+library(plotly)
+library(dplyr)
+library(skimr)
+library(ggthemes)
+library(gridExtra)
+library(ggforce)
+library(car)
+library(reshape2)
+library(xgboost)
+library(caret)
+
+trainingData = read_csv('train.csv')
+testData = read_csv('test.csv')
+set.seed(10)
+
+```
+
+Quick Snapshot of Data followed by seperating individual variable types
+```{r}
+names(trainingData)
+head(trainingData)
+head(testData)
+
+categoricalVarNames = c(paste('Product_Info_', c(1:3,5:7), sep=''), 
+                      paste('Employment_Info_', c(2,3,5), sep=""), 
+                      paste('InsuredInfo_', 1:7, sep=''), 
+                      paste('Insurance_History_', c(1:4,7:9), sep=''),
+                      'Family_Hist_1', 
+                      paste('Medical_History_', c(2:14, 16:23, 25:31, 33:41), sep=''))
+
+continuousVarNames = c('Product_Info_4', 
+                       'Ins_Age', 
+                       'Ht', 
+                       'Wt', 
+                       'BMI', 
+                       'Employment_Info_1', 
+                       'Employment_Info_4', 
+                       'Employment_Info_6', 
+                       'Insurance_History_5', 
+                       'Family_Hist_2', 
+                       'Family_Hist_3', 
+                       'Family_Hist_4', 
+                       'Family_Hist_5')
+
+discreteVarNames = c('Medical_History_1', 
+                     'Medical_History_15', 
+                     'Medical_History_24', 
+                     'Medical_History_32', 
+                     paste('Medical_Keyword_', 1:48, sep=''))
+
+train_categorical = trainingData %>% select(categoricalVarNames)
+test_categorical = testData %>% select(categoricalVarNames)
+
+train_continuous = trainingData %>% select(continuousVarNames)
+test_continuous = testData %>% select(continuousVarNames)
+
+train_discrete = trainingData %>% select(discreteVarNames)
+test_discrete = testData %>% select(discreteVarNames)
+
+```
+
+Let's take a look at the categorical variable type
+
+```{r}
+skim(train_categorical)
+skim(test_categorical)
+```
+Let's explore continuous variables
+```{r}
+skim(train_continuous)
+skim(test_continuous)
+```
+
+Let's explore discrete variables
+```{r}
+skim(train_discrete)
+skim(test_discrete)
+```
+
+From the above skim statements, we see some missing data. What is the precentage of missing data in training and test datasets
+```{r}
+sum(is.na(trainingData)) / (nrow(trainingData) * ncol(trainingData))
+sum(is.na(testData)) / (nrow(testData) * ncol(testData))
+
+apply(trainingData, 2, function(x){
+  sum(is.na(x))
+})
+
+apply(testData, 2, function(x){
+  sum(is.na(x))
+})
+```
+
+
+Now let's look at the response variable. The response variable is of nominal type and has levels from 1 to 8.
+```{r}
+temp1 = ggplot(trainingData, aes(x = Response)) + geom_histogram(fill = 'Blue', alpha=0.5)
+ggplotly(temp1, color = ~Response, width = 400, height = 200) %>% layout(title= 'Distribution of Response Variable', plot_bgcolor= 'white', xaxis = list(gridcolor = 'lightgrey', opacity = 0.2), yaxis = list(gridcolor = 'lightgrey', opacity = 0.2), autosize = F, width = 400, height = 200)
+```
+
+
+Based on the above plot we see that Response = 8 is most common and Response = 3 is least common in the dataset. Now let's look at how missing values relate to these responses
+
+```{r}
+noofNAperResponseType <- sapply(sort(unique(trainingData$Response)), function(x) {
+                            apply(trainingData[trainingData$Response == x, ], 2, function(y) {
+              sum(is.na(y)) 
+                            }) 
+                        })
+noofNAperResponseType
+round(colSums(noofNAperResponseType) / sum(noofNAperResponseType), digits=2)
+```
+From this we see that data with Response as 8 has most missing values whereas Response equals 3 has least missing values. Now let's look for Duplicated and Constant Rows
+
+```{r}
+cat('Number of duplicated rows in Training dataset = ', nrow(trainingData) - nrow(unique(trainingData)), '\n')
+cat('Number of constant rows in Training dataset = ', sum(sapply(trainingData,                                                         function(x){                                                                       length(unique(x)) == 1})), '\n')
+                                                        #How to tell a dplyr function to apply it                                                             columnwise
+cat('Number of duplicated rows in Test dataset = ', nrow(testData) - nrow(unique(testData)), '\n')
+cat('Number of constant rows in Test dataset = ', sum(sapply(testData, function(x){                                                                       length(unique(x)) == 1})), '\n')
+```
+
+
+Now that we have looked at missing values, checked for duplication and constant rows. Let's look at individual data types and visualize the distribution.
+
+Plot densities of continuous features
+
+```{r}
+tempDataset = train_continuous %>% select(c(1, 2)) %>% gather()
+tempdenPlot = ggplot(data = tempDataset) + geom_density(mapping = aes(x = value, fill = key, alpha = 0.5)) + labs(title = 'Density Plots')
+ggplotly(tempdenPlot, height= 600, width = 800) %>% 
+      layout(plot_bgcolor='transparent', paper_bgcolor= 'transparent', autosize = F, width = 800, height = 600)
+
+physicalAttDataset = train_continuous %>% select(Ht, Wt, BMI) %>% gather()
+tempdenPlot = ggplot(data = physicalAttDataset) + geom_density(mapping = aes(x = value, fill = key, alpha = 0.5)) + labs(title = 'Density Plots of Physical Characteristics')
+ggplotly(tempdenPlot, height= 600, width = 800) %>% 
+      layout(plot_bgcolor='transparent', paper_bgcolor= 'transparent', autosize = F, width = 800, height = 600)
+
+employAttDataset = train_continuous %>% select(Employment_Info_1, Employment_Info_6) %>% gather()
+tempdenPlot = ggplot(data = employAttDataset) + geom_density(mapping = aes(x = value, fill = key, alpha = 0.5)) + labs(title = 'Density Plots of Employment Info 1 and 6')
+ggplotly(tempdenPlot, height= 600, width = 800) %>% 
+      layout(plot_bgcolor='transparent', paper_bgcolor= 'transparent', autosize = F, width = 800, height = 600)
+
+employDataset = train_continuous %>% select(Employment_Info_4) %>% gather()
+tempdenPlot = ggplot(data = employDataset) + geom_density(mapping = aes(x = value, fill = key, alpha = 0.5)) + labs(title = 'Density Plots of Employment Info 4')
+ggplotly(tempdenPlot, height= 600, width = 800) %>% 
+      layout(plot_bgcolor='transparent', paper_bgcolor= 'transparent', autosize = F, width = 800, height = 600)
+
+familyHistDataset = train_continuous %>% select(starts_with('Family_Hist_')) %>% gather()
+tempdenPlot = ggplot(data = familyHistDataset) + geom_density(mapping = aes(x = value, fill = key, alpha = 0.5)) + labs(title = 'Density Plots of Family History')
+ggplotly(tempdenPlot, height= 600, width = 800) %>% 
+      layout(plot_bgcolor='transparent', paper_bgcolor= 'transparent', autosize = F, width = 800, height = 600)
+
+insurHistDataset = train_continuous %>% select(c(9)) %>% gather()
+tempdenPlot = ggplot(data = insurHistDataset) + geom_density(mapping = aes(x = value, fill = key, alpha = 0.5)) + labs(title = 'Density Plots')
+ggplotly(tempdenPlot, height= 800, width = 1000) %>% 
+      layout(plot_bgcolor='transparent', paper_bgcolor= 'transparent', autosize = F, width = 800, height = 800)
+
+```
+Plot Boxplots of Continuous Variables
+```{r}
+tempDataset = train_continuous %>% select(c(1, 2, 9)) %>% gather()
+plot_ly(data = tempDataset, type = 'box', split = ~key, y = ~value) %>% layout(title = 'Box Plots')
+plot_ly(data = physicalAttDataset, type = 'box', split = ~key, y = ~value) %>% layout(title = 'Box Plots of Physical Characteristics')
+plot_ly(data = familyHistDataset, type = 'box', split = ~key, y = ~value) %>% layout(title = 'Box Plots of Family History Attributes')
+employInfoData = train_continuous %>% select(starts_with('Employment_Info_')) %>% gather()
+plot_ly(data = employInfoData, type = 'box', split = ~key, y = ~value) %>% layout(title = 'Box Plots of Employment Information Attributes')
+```
+Histograms of Categorical Variables
+```{r}
+subSelectionVals = c('Product_Info', 'Employment_Info', 'InsuredInfo', 'Insurance_History', 'Family_Hist', 'Medical_History')
+for(i in subSelectionVals) {
+  tempCatDataset = train_categorical %>% select(starts_with(i))
+  tempcolNames = names(tempCatDataset)
+   for(j in tempcolNames){
+    if(j == 'Product_Info_2' | j == 'Medical_History_10') next
+    tempCatPlot = ggplot(data = train_categorical) + geom_histogram(mapping = aes_string(x = j), fill = 'Blue', alpha = 0.5)
+    tempCatPlot = ggplotly(tempCatPlot, color = ~j, width = 400, height = 200) %>% layout(title= 'Distribution of Categorical Variable', plot_bgcolor= 'white', xaxis = list(gridcolor = 'lightgrey', opacity = 0.2), yaxis = list(gridcolor = 'lightgrey', opacity = 0.2), autosize = F, width = 400, height = 200)
+    print(tempCatPlot)
+  }
+}
+```
+From the density plots it looks like Employment_Info_6 has a very similar histogram to the response variable. Its a good indication that this variable maybe a good predictor of the response variable.
+
+Now let's explore to see the relationship and any collinearity that exist between the variables. First lets plot a correlation matrix of all continuous and categorical variables with response
+
+```{r}
+corInputVarNames = c(categoricalVarNames, continuousVarNames)
+corInputData = trainingData %>% select(corInputVarNames) %>% select(-Product_Info_2)
+cor1 = cor(corInputData)
+corDatalongform = melt(cor1)
+ggplot(data = corDatalongform, mapping = aes(x = Var1, y = Var2, fill = value)) + geom_tile(color = 'white') + scale_fill_gradient2(low = 'blue', high = 'red', mid = 'white', midpoint = 0, limit = c(-1,1)) + theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 1)) + ggtitle ('Pearson Correlation Matrix excl. Discrete Variables (Medical Keywords)')
+
+```
+
+From this we see some interesting observations:
+i. Medica_History_25 and Medical_History_26 show negative correlation.
+ii. Variable 7 is strongly correlated with variables 18 and 14.
+
+Now let's look at detail by subsetting the data to identify correlation that exist between bins of input data ie types like Medical History, Product Info etc.
+
+```{r}
+medHistData = trainingData %>% select(starts_with('Medical_History'), Response, -c(Medical_History_10, Medical_History_24, Medical_History_32))
+cormedHist = cor(medHistData)
+corMedHistlongform = melt(cormedHist)
+ggplot(data = corMedHistlongform, mapping = aes(x = Var1, y = Var2, fill = value)) + geom_tile(color = 'white') + scale_fill_gradient2(low = 'blue', high = 'red', mid = 'white', midpoint = 0, limit = c(-1,1)) + theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 1)) + ggtitle ('Pearson Correlation Matrix for Medical History Variables')
+
+```
+
+From this graph we can see that:
+i. Medical_History_25 and Medical_History_26 show negative correlation
+ii. Medical_History_36 is postively correlated to Medical_History_15 and negatively correlated to Medical_History_26
+iii. Medical_History_7 is storgly correlated with Medical_History_8 and Medical_History_14
+
+```{r}
+physicalData = trainingData %>% select(Ins_Age, BMI, Ht, Wt, Response)
+corPhyData = cor(physicalData)
+corPhyDatalongForm = melt(corPhyData)
+ggplot(data = corPhyDatalongForm, mapping = aes(x = Var1, y = Var2, fill = value)) + geom_tile(color = 'white') + scale_fill_gradient2(low = 'blue', high = 'red', mid = 'white', midpoint = 0, limit = c(-1,1)) + theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 1)) + ggtitle ('Pearson Correlation Matrix for Physical Attributes')
+
+```
+From this graph its interesting to see that Response is negatively correlated with Wt/BMI and Ins_Age.
+
+```{r}
+insData = trainingData %>% select(starts_with('Insurance_History'), Response)
+corinsData = cor(insData)
+corinsDatalongform = melt(corinsData)
+ggplot(data = corinsDatalongform, mapping = aes(x = Var1, y = Var2, fill = value)) + geom_tile(color = 'white') + scale_fill_gradient2(low = 'blue', high = 'red', mid = 'white', midpoint = 0, limit = c(-1,1)) + theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 1)) + ggtitle ('Pearson Correlation Matrix for Insurance History Attributes')
+```
+From this graph its interesting to see that Response is slightly negatively correlated to Insurance_History_2 variable. Insurance_History_3 is negatively correlated to 4, 7, 9. 4 is positively correlated to 7 and 9, 1. 7 is positively correlated 4, 1, 9.
+
+
+
+```{r}
+productData = trainingData %>% select(starts_with('Product_Info'), Response, -Product_Info_2)
+corProductData = cor(productData)
+corProductDatalongform = melt(corProductData)
+ggplot(data = corProductDatalongform, mapping = aes(x = Var1, y = Var2, fill = value)) + geom_tile(color = 'white') + scale_fill_gradient2(low = 'blue', high = 'red', mid = 'white', midpoint = 0, limit = c(-1,1)) + theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 1)) + ggtitle ('Pearson Correlation Matrix for Product Information Attributes')
+```
+
+After plotting the correlation matrix for all variables and their subtypes, we now move on to fitting models. First we need to handle missing values. For this analysis we drop columns which have missing values.
+
+```{r}
+updatedTrainingData = trainingData[, colSums(is.na(trainingData)) == 0]
+updatedTestData = testData[, colSums(is.na(testData)) == 0]
+
+featureNames = names(updatedTrainingData)[2 : (ncol(updatedTrainingData) - 1)]
+
+for(k in featureNames){
+  if(class(updatedTrainingData[[k]]) == 'character'){
+   level = unique(c(updatedTrainingData[[k]], updatedTestData[[k]]))
+   updatedTrainingData[[k]] = as.integer(factor(updatedTrainingData[[k]], levels = level))
+   updatedTestData[[k]] = as.integer(factor(updatedTestData[[k]], levels = level)) 
+  }
+}
+```
+Now that the data is cleaned, lets fit few models
+```{r}
+xgbModel = xgboost(data = data.matrix(updatedTrainingData[, featureNames]), label = updatedTrainingData$Response, eta = 0.025, depth = 10, nrounds = 100, objective = 'reg:linear', eval_metric = 'rmse')
+impMatrix = xgb.importance(model = xgbModel)
+impMatrixtop10 = impMatrix[c(1:10), ]
+xgb.plot.importance(importance_matrix = impMatrixtop10)
+
+impMatrixtop30 = impMatrix[c(1:30), ]
+xgb.plot.importance(importance_matrix = impMatrixtop30)
+```
+
+```{r}
+submissionData = data.frame(Id = updatedTestData$Id)
+submissionData$Response = round(predict(xgbModel, data.matrix(updatedTestData[, featureNames])))
+```
+Questions:
+1. A refined statement of the model's purpose and application from project Component 1.
+  The main purpose of model development was to look for parameters that have a strong influence on the final decision associated with an life insurance application.
+  
+2. A refined statement of the data used in the model, as well as transformations and abstractions you performed.
+  In order to acheive this, an Extreme Gradient Boost model was fit on the training dataset. Before XGBoost model was fit on the dataset, the data was scrubbed to discard variables (columns) with NULL values. Further variables of character type (Product_Info_2) was coded with Numeric ID's based on the assumption that they are categorical. In addition to this during the exploratory data analysis phase several transformation/abstraction technique was used (gather, calculate percent NULL values for each response type etc.)
+  
+3. A refined statement about its validity and generalizability.
+  The parameters selected by the XGBoost model as having a strong influence on the decision of a life insurance application makes sense. We can see Physical attributes (BMI, Age) and Medical History have the strongest influence. In terms of generalizability it seems to make sense that Medical background and Physical attributes of a person have strong influence on life insurance application decision.
+  
+4. A refined graphical depiction of the most revealing and interesting element of the model.
+  When we expand our selection of variable importance to 30 top variables that influence Life insurance decision, it was interesting to see that most of the applicant employment information hardly mattered. Infact, only one of the employment parameters made it to the top 30 list.
