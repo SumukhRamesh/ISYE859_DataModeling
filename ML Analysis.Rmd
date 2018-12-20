@@ -1,0 +1,103 @@
+---
+title: "Prudential Life Insurance Data Modeling"
+Author: 'Sumukh Ramesh'
+Date: 'December 10th, 2018'
+Last Update: ''
+output: html_notebook
+---
+
+Load the required libraries and read training data
+```{r, echo = FALSE, message = FALSE, warnings = FALSE}
+library(tidyverse)
+library(ggplot2)
+library(plotly)
+library(dplyr)
+library(skimr)
+library(ggthemes)
+library(gridExtra)
+library(ggforce)
+library(car)
+library(reshape2)
+library(xgboost)
+library(caret)
+
+trainingData = read_csv('train.csv')
+```
+
+FROM our EDA, we see that the training data has 5% of missing values. Let's impute missing values by eliminating them
+```{r}
+updatedTrainingData = trainingData[, colSums(is.na(trainingData)) == 0]
+```
+
+Next assuming that the text variables in the dataset are of nominal type, we replace them with numeric ids
+```{r}
+for(k in featureNames){
+  if(class(updatedTrainingData[[k]]) == 'character'){
+    level = unique(c(updatedTrainingData[[k]]))
+    updatedTrainingData[[k]] = as.integer(factor(updatedTrainingData[[k]], levels = level))
+  }
+}
+```
+
+Next we partition input data into training and test using a 75:25 split
+```{r}
+index = createDataPartition(updatedTrainingData$Response, p = 0.75, list = FALSE)
+trainDF = updatedTrainingData[index,]
+testDF = updatedTrainingData[-index,]
+```
+
+Define cross validation requirement using trainControl method
+```{r}
+fitControl = trainControl(method = 'cv', number = 5, savePredictions = TRUE,
+                          classProbs = TRUE)
+```
+
+Now we fit an XGBoost model with tuning parameters as defined below
+```{r}
+parametersGrid = expand.grid(eta =  0.1, 
+                             colsample_bytree=c(0.5,0.7),
+                             max_depth=c(3, 6),
+                             nrounds = 100,
+                             gamma = 1,
+                             min_child_weight = 2,
+                             subsample = 1
+                             )
+
+modelxgboost = train(Response ~ ., data = trainDF, 
+                     method = 'xgbTree',
+                     trControl = fitControl,
+                     tuneGrid = parametersGrid,
+                     metric = 'RMSE')
+```
+
+Once the model is generated we create a feature importance matrix and then top 10 features
+```{r}
+impMeasure = data.frame(varImp(modelxgboost)$importance)
+impMeasure$Vars = row.names(impMeasure)
+top10Measure = impMeasure[order(-impMeasure$Overall), ][1:10, ]
+```
+
+Next, we fit a GLM model to compare the results with XGBoost model. Further feature importance matrix and top 10 features are identified
+```{r}
+impMeasureGLM = data.frame(varImp(modelGLM)$importance)
+impMeasureGLM$Vars = row.names(impMeasureGLM)
+top10MeasureGLM = impMeasureGLM[order(-impMeasureGLM$Overall), ][1:10, ]
+```
+
+Finally we plot the top 10 features predicted by XGBoost and GLM model and generate predictions for both models
+```{r}
+ggplot(data = top10Measure, mapping = aes(x = reorder(Vars, Overall), y = Overall)) + 
+  geom_bar(stat = 'identity') + coord_flip() + 
+  labs(title = 'Top 10 Features recommended by XGBoost', x = 'Features', y = 'Importance')
+
+ggplot(data = top10MeasureGLM, mapping = aes(x = reorder(Vars, Overall), y = Overall)) + 
+  geom_bar(stat = 'identity') + coord_flip() + 
+  labs(title = 'Top 10 Features recommended by GLM', x = 'Features', y = 'Importance')
+
+predictionsXGB = round(predict(modelxgboost, testDF))
+confusionMatrixXGB = table(predictions = predictionsXGB, actual = testDF$Response)
+
+predictionsGLM = round(predict(modelGLM, testDF))
+confusionMatrixGLM = table(predictions = predictionsGLM, actual = testDF$Response)
+```
+
